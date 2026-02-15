@@ -1,0 +1,180 @@
+import os
+import cv2
+import json
+import time
+import numpy as np
+import requests
+import tensorflow as tf
+
+MODEL_PATH = os.path.join("model", "model.tflite")
+LABELS_PATH = os.path.join("model", "labels.txt")
+
+SPOONACULAR_API_KEY = "PUT_YOUR_KEY_HERE"  # <-- change this
+SPOONACULAR_FIND_BY_ING = "https://api.spoonacular.com/recipes/findByIngredients"
+
+IMG_SIZE = 224  # based on your paper (224x224)
+
+def load_labels(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
+
+def load_interpreter(model_path):
+    if not os.path.exists(model_path):
+        return None
+    interpreter = tf.lite.Interpreter(model_path=model_path)
+    interpreter.allocate_tensors()
+    return interpreter
+
+def preprocess_bgr_frame(frame_bgr, size=224):
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    resized = cv2.resize(frame_rgb, (size, size), interpolation=cv2.INTER_AREA)
+    x = resized.astype(np.float32) / 255.0
+    x = np.expand_dims(x, axis=0)  # (1,224,224,3)
+    return x
+
+def classify_frame(interpreter, labels, x):
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+
+    # Handle input type (float32 or uint8 models)
+    in_dtype = input_details[0]["dtype"]
+    x_in = x
+
+    if in_dtype == np.uint8:
+        # quantized input: scale to 0..255
+        x_in = (x * 255.0).astype(np.uint8)
+    else:
+        x_in = x.astype(np.float32)
+
+    interpreter.set_tensor(input_details[0]["index"], x_in)
+    interpreter.invoke()
+
+    out = interpreter.get_tensor(output_details[0]["index"])[0]
+
+    # If output is quantized
+    if out.dtype == np.uint8:
+        out = out.astype(np.float32) / 255.0
+
+    best_idx = int(np.argmax(out))
+    conf = float(out[best_idx])
+
+    label = labels[best_idx] if 0 <= best_idx < len(labels) else f"class_{best_idx}"
+    return label, conf
+
+def fetch_recipes(ingredients_list, number=6):
+    if not SPOONACULAR_API_KEY or SPOONACULAR_API_KEY == "PUT_YOUR_KEY_HERE":
+        return [{"title": "No API key set", "info": "Set SPOONACULAR_API_KEY to fetch recipes."}]
+
+    params = {
+        "ingredients": ",".join(ingredients_list),
+        "number": number,
+        "ranking": 1,
+        "ignorePantry": True,
+        "apiKey": SPOONACULAR_API_KEY
+    }
+    r = requests.get(SPOONACULAR_FIND_BY_ING, params=params, timeout=20)
+    if r.status_code != 200:
+        return [{"title": "API error", "info": f"Status {r.status_code}: {r.text[:120]}"}]
+    data = r.json()
+    recipes = []
+    for item in data:
+        recipes.append({
+            "title": item.get("title", "Untitled"),
+            "used": item.get("usedIngredientCount", 0),
+            "missed": item.get("missedIngredientCount", 0)
+        })
+    return recipes
+
+def main():
+    labels = load_labels(LABELS_PATH)
+    interpreter = load_interpreter(MODEL_PATH)
+
+    if interpreter is None or not labels:
+        print("⚠ Model or labels not found.")
+        print(f"Expected model at: {MODEL_PATH}")
+        print(f"Expected labels at: {LABELS_PATH}")
+        print("The camera will still run, but prediction will be 'unknown'.")
+
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("❌ Cannot open laptop camera.")
+        return
+
+    pantry = []
+    last_label = None
+    last_add_time = 0
+
+    print("✅ SmartCulinary AI (Laptop Cam) running.")
+    print("Controls:")
+    print("  [SPACE] = capture + classify + add to pantry")
+    print("  [R]     = get recipes from pantry (prints to terminal)")
+    print("  [C]     = clear pantry")
+    print("  [Q]     = quit")
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        display = frame.copy()
+
+        # UI overlay
+        cv2.putText(display, "SmartCulinary AI - Laptop Camera", (10, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
+        cv2.putText(display, f"Pantry: {', '.join(pantry) if pantry else '(empty)'}", (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+
+        cv2.putText(display, "SPACE=Scan  R=Recipes  C=Clear  Q=Quit", (10, display.shape[0] - 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+        cv2.imshow("SmartCulinary AI", display)
+
+        key = cv2.waitKey(1) & 0xFF
+
+        if key == ord('q'):
+            break
+
+        elif key == ord('c'):
+            pantry.clear()
+            print("🧺 Pantry cleared.")
+
+        elif key == ord('r'):
+            if not pantry:
+                print("🧺 Pantry is empty. Scan items first.")
+            else:
+                print("\n🍳 Recipes for:", pantry)
+                recipes = fetch_recipes(pantry, number=6)
+                for i, rec in enumerate(recipes, 1):
+                    if "info" in rec:
+                        print(f"{i}. {rec['title']} - {rec['info']}")
+                    else:
+                        print(f"{i}. {rec['title']}  (Used={rec['used']}, Missing={rec['missed']})")
+                print("")
+
+        elif key == 32:  # SPACE
+            x = preprocess_bgr_frame(frame, IMG_SIZE)
+
+            if interpreter is None or not labels:
+                label, conf = "unknown", 0.0
+            else:
+                label, conf = classify_frame(interpreter, labels, x)
+
+            print(f"🔎 Detected: {label} ({conf*100:.1f}%)")
+
+            # Add to pantry with basic anti-spam
+            now = time.time()
+            if label != "unknown" and (label != last_label or (now - last_add_time) > 2):
+                if label not in pantry:
+                    pantry.append(label)
+                    print(f"✅ Added to pantry: {label}")
+                last_label = label
+                last_add_time = now
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
