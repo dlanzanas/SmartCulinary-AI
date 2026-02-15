@@ -1,180 +1,195 @@
 import os
 import cv2
-import json
 import time
 import numpy as np
-import requests
-import tensorflow as tf
+import random
 
-MODEL_PATH = os.path.join("model", "model.tflite")
-LABELS_PATH = os.path.join("model", "labels.txt")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-SPOONACULAR_API_KEY = "PUT_YOUR_KEY_HERE"  # <-- change this
-SPOONACULAR_FIND_BY_ING = "https://api.spoonacular.com/recipes/findByIngredients"
+DATASET_DIR = os.path.join(BASE_DIR, "archive", "images")
+RECIPE_PATH = os.path.join(BASE_DIR, "RECIPE.txt")
 
-IMG_SIZE = 224  # based on your paper (224x224)
+# LOW-SPEC / NO-LAG SETTINGS
+MAX_SIDE = 220
+NFEATURES = 550
+SAMPLE_PER_CLASS = 12
+EVAL_EVERY_SECONDS = 1.2
+SMOOTH_FRAMES = 3
+MIN_GOOD_MATCHES = 8
 
-def load_labels(path):
-    if not os.path.exists(path):
-        return []
+RATIO_TEST = 0.80
+GOOD_DIST = 65
+
+def load_recipe_map(path):
+    recipes = {}
     with open(path, "r", encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip()]
-
-def load_interpreter(model_path):
-    if not os.path.exists(model_path):
-        return None
-    interpreter = tf.lite.Interpreter(model_path=model_path)
-    interpreter.allocate_tensors()
-    return interpreter
-
-def preprocess_bgr_frame(frame_bgr, size=224):
-    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    resized = cv2.resize(frame_rgb, (size, size), interpolation=cv2.INTER_AREA)
-    x = resized.astype(np.float32) / 255.0
-    x = np.expand_dims(x, axis=0)  # (1,224,224,3)
-    return x
-
-def classify_frame(interpreter, labels, x):
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-
-    # Handle input type (float32 or uint8 models)
-    in_dtype = input_details[0]["dtype"]
-    x_in = x
-
-    if in_dtype == np.uint8:
-        # quantized input: scale to 0..255
-        x_in = (x * 255.0).astype(np.uint8)
-    else:
-        x_in = x.astype(np.float32)
-
-    interpreter.set_tensor(input_details[0]["index"], x_in)
-    interpreter.invoke()
-
-    out = interpreter.get_tensor(output_details[0]["index"])[0]
-
-    # If output is quantized
-    if out.dtype == np.uint8:
-        out = out.astype(np.float32) / 255.0
-
-    best_idx = int(np.argmax(out))
-    conf = float(out[best_idx])
-
-    label = labels[best_idx] if 0 <= best_idx < len(labels) else f"class_{best_idx}"
-    return label, conf
-
-def fetch_recipes(ingredients_list, number=6):
-    if not SPOONACULAR_API_KEY or SPOONACULAR_API_KEY == "PUT_YOUR_KEY_HERE":
-        return [{"title": "No API key set", "info": "Set SPOONACULAR_API_KEY to fetch recipes."}]
-
-    params = {
-        "ingredients": ",".join(ingredients_list),
-        "number": number,
-        "ranking": 1,
-        "ignorePantry": True,
-        "apiKey": SPOONACULAR_API_KEY
-    }
-    r = requests.get(SPOONACULAR_FIND_BY_ING, params=params, timeout=20)
-    if r.status_code != 200:
-        return [{"title": "API error", "info": f"Status {r.status_code}: {r.text[:120]}"}]
-    data = r.json()
-    recipes = []
-    for item in data:
-        recipes.append({
-            "title": item.get("title", "Untitled"),
-            "used": item.get("usedIngredientCount", 0),
-            "missed": item.get("missedIngredientCount", 0)
-        })
+        for line in f:
+            line = line.strip()
+            if not line or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            recipes[k.strip().upper()] = v.strip()
     return recipes
 
+def list_classes(dataset_dir):
+    classes = []
+    for d in os.listdir(dataset_dir):
+        p = os.path.join(dataset_dir, d)
+        if os.path.isdir(p):
+            classes.append(d)
+    return sorted(classes)
+
+def list_images(class_dir):
+    exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+    files = [os.path.join(class_dir, f) for f in os.listdir(class_dir) if f.lower().endswith(exts)]
+    files.sort()
+    return files
+
+def to_gray_resized(img_bgr, max_side):
+    h, w = img_bgr.shape[:2]
+    scale = max_side / max(h, w)
+    if scale < 1.0:
+        img_bgr = cv2.resize(img_bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+def sample_files(files, k):
+    if k is None or len(files) <= k:
+        return files
+    return random.sample(files, k)
+
+def build_signatures(dataset_dir, classes, orb):
+    signatures = {}
+    for c in classes:
+        cdir = os.path.join(dataset_dir, c)
+        all_files = list_images(cdir)
+        files = sample_files(all_files, SAMPLE_PER_CLASS)
+
+        descs = []
+        for fp in files:
+            im = cv2.imread(fp)
+            if im is None:
+                continue
+            gray = to_gray_resized(im, MAX_SIDE)
+            kp, des = orb.detectAndCompute(gray, None)
+            if des is not None and len(des) > 0:
+                descs.append(des)
+
+        signatures[c] = descs
+        print(f"Loaded {c}: {len(descs)} samples (from {len(all_files)} total)")
+    return signatures
+
+def match_score(des_live, class_descs, bf):
+    if des_live is None or len(des_live) == 0:
+        return 0
+
+    best = 0
+    for des_ref in class_descs:
+        if des_ref is None or len(des_ref) == 0:
+            continue
+        matches = bf.knnMatch(des_live, des_ref, k=2)
+        good = 0
+        for m, n in matches:
+            if m.distance < RATIO_TEST * n.distance and m.distance < GOOD_DIST:
+                good += 1
+        if good > best:
+            best = good
+    return best
+
+def majority_vote(labels):
+    if not labels:
+        return "NONE"
+    counts = {}
+    for l in labels:
+        counts[l] = counts.get(l, 0) + 1
+    return max(counts.items(), key=lambda x: x[1])[0]
+
+def overlay(frame, lines):
+    y = 30
+    for t in lines:
+        cv2.putText(frame, t, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        y += 30
+
 def main():
-    labels = load_labels(LABELS_PATH)
-    interpreter = load_interpreter(MODEL_PATH)
-
-    if interpreter is None or not labels:
-        print("⚠ Model or labels not found.")
-        print(f"Expected model at: {MODEL_PATH}")
-        print(f"Expected labels at: {LABELS_PATH}")
-        print("The camera will still run, but prediction will be 'unknown'.")
-
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("❌ Cannot open laptop camera.")
+    if not os.path.isdir(DATASET_DIR):
+        print("❌ Dataset folder not found:", DATASET_DIR)
+        return
+    if not os.path.exists(RECIPE_PATH):
+        print("❌ RECIPE.txt not found:", RECIPE_PATH)
         return
 
-    pantry = []
-    last_label = None
-    last_add_time = 0
+    recipes = load_recipe_map(RECIPE_PATH)
+    classes = list_classes(DATASET_DIR)
 
-    print("✅ SmartCulinary AI (Laptop Cam) running.")
-    print("Controls:")
-    print("  [SPACE] = capture + classify + add to pantry")
-    print("  [R]     = get recipes from pantry (prints to terminal)")
-    print("  [C]     = clear pantry")
-    print("  [Q]     = quit")
+    orb = cv2.ORB_create(nfeatures=NFEATURES)
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+
+    print("✅ Building signatures (LOW-LAG MODE)...")
+    signatures = build_signatures(DATASET_DIR, classes, orb)
+
+    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    if not cap.isOpened():
+        print("❌ Cannot open laptop camera")
+        return
+
+    recent_preds = []
+    last_eval = 0.0
+    last_best_label = "NONE"
+    last_best_score = 0
+
+    print("\n✅ Running. Hold item steady. Press Q to quit.\n")
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        display = frame.copy()
+        now = time.time()
 
-        # UI overlay
-        cv2.putText(display, "SmartCulinary AI - Laptop Camera", (10, 28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        if (now - last_eval) >= EVAL_EVERY_SECONDS:
+            gray_live = to_gray_resized(frame, MAX_SIDE)
+            kp, des_live = orb.detectAndCompute(gray_live, None)
 
-        cv2.putText(display, f"Pantry: {', '.join(pantry) if pantry else '(empty)'}", (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+            best_label = "NONE"
+            best_score = 0
 
-        cv2.putText(display, "SPACE=Scan  R=Recipes  C=Clear  Q=Quit", (10, display.shape[0] - 14),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            for c in classes:
+                sc = match_score(des_live, signatures.get(c, []), bf)
+                if sc > best_score:
+                    best_score = sc
+                    best_label = c
 
-        cv2.imshow("SmartCulinary AI", display)
+            if best_score < MIN_GOOD_MATCHES:
+                best_label = "NONE"
 
-        key = cv2.waitKey(1) & 0xFF
+            recent_preds.append(best_label)
+            if len(recent_preds) > SMOOTH_FRAMES:
+                recent_preds.pop(0)
 
-        if key == ord('q'):
+            last_best_label = best_label
+            last_best_score = best_score
+            last_eval = now
+
+        final_label = majority_vote(recent_preds)
+        ingredients = recipes.get(final_label, "(no recipe mapping)")
+
+        lines = [
+            "SmartCulinary AI (No-Lag Folder Matching)",
+            f"Detected: {final_label}",
+            f"Score: {last_best_score} | Updates every {EVAL_EVERY_SECONDS}s",
+            "Ingredients:",
+            ingredients[:80] + ("..." if len(ingredients) > 80 else ""),
+            "Hold item close | Good lighting | Q to quit"
+        ]
+
+        overlay(frame, lines)
+        cv2.imshow("SmartCulinary AI", frame)
+
+        if (cv2.waitKey(1) & 0xFF) == ord("q"):
             break
-
-        elif key == ord('c'):
-            pantry.clear()
-            print("🧺 Pantry cleared.")
-
-        elif key == ord('r'):
-            if not pantry:
-                print("🧺 Pantry is empty. Scan items first.")
-            else:
-                print("\n🍳 Recipes for:", pantry)
-                recipes = fetch_recipes(pantry, number=6)
-                for i, rec in enumerate(recipes, 1):
-                    if "info" in rec:
-                        print(f"{i}. {rec['title']} - {rec['info']}")
-                    else:
-                        print(f"{i}. {rec['title']}  (Used={rec['used']}, Missing={rec['missed']})")
-                print("")
-
-        elif key == 32:  # SPACE
-            x = preprocess_bgr_frame(frame, IMG_SIZE)
-
-            if interpreter is None or not labels:
-                label, conf = "unknown", 0.0
-            else:
-                label, conf = classify_frame(interpreter, labels, x)
-
-            print(f"🔎 Detected: {label} ({conf*100:.1f}%)")
-
-            # Add to pantry with basic anti-spam
-            now = time.time()
-            if label != "unknown" and (label != last_label or (now - last_add_time) > 2):
-                if label not in pantry:
-                    pantry.append(label)
-                    print(f"✅ Added to pantry: {label}")
-                last_label = label
-                last_add_time = now
 
     cap.release()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
+
