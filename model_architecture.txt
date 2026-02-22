@@ -1,0 +1,24 @@
+Model: "SmartCulinary_MobileNetV2"
+_________________________________________________________________
+ Layer (type)                Output Shape              Param #   
+=================================================================
+ input_2 (InputLayer)        [(None, 224, 224, 3)]     0         
+                                                                 
+ mobilenetv2_1.00_224 (Funct  (None, 1280)             2257984   
+ ional)                                                          
+                                                                 
+ dense (Dense)               (None, 512)               655872    
+                                                                 
+ dropout (Dropout)           (None, 512)               0         
+                                                                 
+ dense_1 (Dense)             (None, 256)               131328    
+                                                                 
+ dropout_1 (Dropout)         (None, 256)               0         
+                                                                 
+ predictions (Dense)         (None, 64)                16448     
+                                                                 
+=================================================================
+Total params: 3,061,632
+Trainable params: 803,648
+Non-trainable params: 2,257,984
+_________________________________________________________________
