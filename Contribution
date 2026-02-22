@@ -1,35 +1,30 @@
-SYSTEM / DEPLOYMENT / DATA (Integrator)
-
+LEADER / CORE AI (Coding)
 Branch:
-feature/system-integration
+feature/ai-model
 Responsible for:
 
-Project setup, configs, environment, documentation.
+Everything related to machine learning & backend logic
 
 From your folders:
 
-✅ config/
-✅ utils/
-✅ setup_environment
-✅ install_cuda_gpu
-✅ fix_tensorboard
-✅ requirements
-✅ API_BACKEND_SETUP
-✅ README files
-✅ datasets/
-✅ data/
-✅ reports/
+✅ train/
+✅ models/
+✅ checkpoints/
+✅ evaluate.py
+✅ convert_model_to_tflite.py
+✅ convert_model_to_tfjs.py
+✅ tensorflow_conversion/
+✅ api_server.py
+✅ api_requirements
 
 Tasks:
 
-Environment setup
+Model training
 
-Dependency management
+Model evaluation
 
-Dataset organization
+TFLite conversion
 
-Documentation
+API logic
 
-Testing pipeline
-
-Running system end-to-end
+ML debugging
