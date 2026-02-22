@@ -1,0 +1,35 @@
+SYSTEM / DEPLOYMENT / DATA (Integrator)
+
+Branch:
+feature/system-integration
+Responsible for:
+
+Project setup, configs, environment, documentation.
+
+From your folders:
+
+✅ config/
+✅ utils/
+✅ setup_environment
+✅ install_cuda_gpu
+✅ fix_tensorboard
+✅ requirements
+✅ API_BACKEND_SETUP
+✅ README files
+✅ datasets/
+✅ data/
+✅ reports/
+
+Tasks:
+
+Environment setup
+
+Dependency management
+
+Dataset organization
+
+Documentation
+
+Testing pipeline
+
+Running system end-to-end
