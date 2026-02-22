@@ -1,6 +1,6 @@
 # SmartCulinary AI - ML Training Program
 
-Link = https://drive.google.com/file/d/1THAWtQ8BYsH4g3Ov3gIidaVlPiRN5_KC/view 
+Link Download = https://drive.google.com/file/d/1THAWtQ8BYsH4g3Ov3gIidaVlPiRN5_KC/view 
 
 Complete machine learning training program for the SmartCulinary AI MVP, featuring multi-dataset support, transfer learning with MobileNetV2, and automated TFLite conversion.
 
