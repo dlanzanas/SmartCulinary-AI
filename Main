@@ -1,195 +1,243 @@
-import os
-import cv2
-import time
-import numpy as np
-import random
+# SmartCulinary AI - Environment Setup Script
+# This script automates the complete ML training environment setup on Windows
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "SmartCulinary AI - Environment Setup" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
 
-DATASET_DIR = os.path.join(BASE_DIR, "archive", "images")
-RECIPE_PATH = os.path.join(BASE_DIR, "RECIPE.txt")
+# Configuration
+$PYTHON_VERSION = "3.9.13"
+$PYTHON_INSTALLER_URL = "https://www.python.org/ftp/python/$PYTHON_VERSION/python-$PYTHON_VERSION-amd64.exe"
+$PYTHON_INSTALLER = "$env:TEMP\python-$PYTHON_VERSION-amd64.exe"
+$VENV_NAME = "smartculinary_env"
 
-# LOW-SPEC / NO-LAG SETTINGS
-MAX_SIDE = 220
-NFEATURES = 550
-SAMPLE_PER_CLASS = 12
-EVAL_EVERY_SECONDS = 1.2
-SMOOTH_FRAMES = 3
-MIN_GOOD_MATCHES = 8
+# Fix for running in ISE or direct copy-paste where PSScriptRoot might be null
+if ($PSScriptRoot) {
+    $PROJECT_ROOT = $PSScriptRoot
+} else {
+    $PROJECT_ROOT = Get-Location
+}
 
-RATIO_TEST = 0.80
-GOOD_DIST = 65
+# Step 1: Check if Python 3.9.x is already installed
+Write-Host "[1/6] Checking Python installation..." -ForegroundColor Yellow
 
-def load_recipe_map(path):
-    recipes = {}
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            recipes[k.strip().upper()] = v.strip()
-    return recipes
+$pythonInstalled = $false
+$pythonPath = $null
 
-def list_classes(dataset_dir):
-    classes = []
-    for d in os.listdir(dataset_dir):
-        p = os.path.join(dataset_dir, d)
-        if os.path.isdir(p):
-            classes.append(d)
-    return sorted(classes)
+try {
+    $pythonVersion = & python --version 2>&1
+    if ($pythonVersion -like "Python 3.9.*") {
+        Write-Host "✓ Python 3.9.x already installed: $pythonVersion" -ForegroundColor Green
+        $pythonInstalled = $true
+        $pythonPath = "python"
+    }
+}
+catch {
+    Write-Host "Python 3.9.x not found in PATH" -ForegroundColor Gray
+}
 
-def list_images(class_dir):
-    exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
-    files = [os.path.join(class_dir, f) for f in os.listdir(class_dir) if f.lower().endswith(exts)]
-    files.sort()
-    return files
+# Check py launcher for Python 3.9
+if (-not $pythonInstalled) {
+    try {
+        $pyVersion = & py -3.9 --version 2>&1
+        if ($pyVersion -like "Python 3.9.*") {
+            Write-Host "✓ Python 3.9.x found via py launcher: $pyVersion" -ForegroundColor Green
+            $pythonInstalled = $true
+            $pythonPath = "py -3.9"
+        }
+    }
+    catch {
+        Write-Host "Python 3.9.x not found via py launcher" -ForegroundColor Gray
+    }
+}
 
-def to_gray_resized(img_bgr, max_side):
-    h, w = img_bgr.shape[:2]
-    scale = max_side / max(h, w)
-    if scale < 1.0:
-        img_bgr = cv2.resize(img_bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+# Step 2: Install Python if not found
+if (-not $pythonInstalled) {
+    Write-Host "Python 3.9.x not found. Installing Python $PYTHON_VERSION..." -ForegroundColor Yellow
+    
+    # Download Python installer
+    Write-Host "Downloading Python installer..." -ForegroundColor Gray
+    try {
+        Invoke-WebRequest -Uri $PYTHON_INSTALLER_URL -OutFile $PYTHON_INSTALLER -UseBasicParsing
+        Write-Host "✓ Download complete" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed to download Python installer" -ForegroundColor Red
+        Write-Host "Please download manually from: $PYTHON_INSTALLER_URL" -ForegroundColor Yellow
+        exit 1
+    }
+    
+    # Install Python silently
+    Write-Host "Installing Python (this may take a few minutes)..." -ForegroundColor Gray
+    $installArgs = "/quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_pip=1"
+    Start-Process -FilePath $PYTHON_INSTALLER -ArgumentList $installArgs -Wait -NoNewWindow
+    
+    # Refresh environment variables
+    $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = $machinePath + ";" + $userPath
+    
+    # Verify installation
+    Start-Sleep -Seconds 3
+    try {
+        $pythonVersion = & python --version 2>&1
+        if ($pythonVersion -like "Python 3.9.*") {
+            Write-Host "✓ Python installed successfully: $pythonVersion" -ForegroundColor Green
+            $pythonPath = "python"
+        }
+        else {
+            throw "Python version mismatch"
+        }
+    }
+    catch {
+        Write-Host "✗ Python installation verification failed" -ForegroundColor Red
+        Write-Host "Please restart your terminal and run this script again" -ForegroundColor Yellow
+        exit 1
+    }
+    
+    # Cleanup installer
+    Remove-Item $PYTHON_INSTALLER -ErrorAction SilentlyContinue
+}
 
-def sample_files(files, k):
-    if k is None or len(files) <= k:
-        return files
-    return random.sample(files, k)
+Write-Host ""
 
-def build_signatures(dataset_dir, classes, orb):
-    signatures = {}
-    for c in classes:
-        cdir = os.path.join(dataset_dir, c)
-        all_files = list_images(cdir)
-        files = sample_files(all_files, SAMPLE_PER_CLASS)
+# Step 3: Create virtual environment
+Write-Host "[2/6] Creating virtual environment '$VENV_NAME'..." -ForegroundColor Yellow
 
-        descs = []
-        for fp in files:
-            im = cv2.imread(fp)
-            if im is None:
-                continue
-            gray = to_gray_resized(im, MAX_SIDE)
-            kp, des = orb.detectAndCompute(gray, None)
-            if des is not None and len(des) > 0:
-                descs.append(des)
+$venvPath = Join-Path $PROJECT_ROOT $VENV_NAME
 
-        signatures[c] = descs
-        print(f"Loaded {c}: {len(descs)} samples (from {len(all_files)} total)")
-    return signatures
+if (Test-Path $venvPath) {
+    Write-Host "Virtual environment already exists. Removing old environment..." -ForegroundColor Gray
+    Remove-Item -Recurse -Force $venvPath
+}
 
-def match_score(des_live, class_descs, bf):
-    if des_live is None or len(des_live) == 0:
-        return 0
+try {
+    if ($pythonPath -eq "python") {
+        & python -m venv $venvPath
+    }
+    else {
+        # Split the py launcher command if needed
+        & py -3.9 -m venv $venvPath
+    }
+    Write-Host "✓ Virtual environment created" -ForegroundColor Green
+}
+catch {
+    Write-Host "✗ Failed to create virtual environment" -ForegroundColor Red
+    exit 1
+}
 
-    best = 0
-    for des_ref in class_descs:
-        if des_ref is None or len(des_ref) == 0:
-            continue
-        matches = bf.knnMatch(des_live, des_ref, k=2)
-        good = 0
-        for m, n in matches:
-            if m.distance < RATIO_TEST * n.distance and m.distance < GOOD_DIST:
-                good += 1
-        if good > best:
-            best = good
-    return best
+Write-Host ""
 
-def majority_vote(labels):
-    if not labels:
-        return "NONE"
-    counts = {}
-    for l in labels:
-        counts[l] = counts.get(l, 0) + 1
-    return max(counts.items(), key=lambda x: x[1])[0]
+# Step 4: Activate virtual environment and upgrade pip
+Write-Host "[3/6] Activating virtual environment and upgrading pip..." -ForegroundColor Yellow
 
-def overlay(frame, lines):
-    y = 30
-    for t in lines:
-        cv2.putText(frame, t, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        y += 30
+$activateScript = Join-Path $venvPath "Scripts\Activate.ps1"
 
-def main():
-    if not os.path.isdir(DATASET_DIR):
-        print("❌ Dataset folder not found:", DATASET_DIR)
-        return
-    if not os.path.exists(RECIPE_PATH):
-        print("❌ RECIPE.txt not found:", RECIPE_PATH)
-        return
+# CRITICAL FIX: Ensure execution policy allows the activation script
+if ((Get-ExecutionPolicy) -eq 'Restricted') {
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+}
 
-    recipes = load_recipe_map(RECIPE_PATH)
-    classes = list_classes(DATASET_DIR)
+# CRITICAL FIX: Use Dot-Sourcing (.) instead of Call (&) to keep environment active
+try {
+    . $activateScript
+}
+catch {
+    Write-Host "✗ Failed to activate virtual environment" -ForegroundColor Red
+    exit 1
+}
 
-    orb = cv2.ORB_create(nfeatures=NFEATURES)
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+if ($env:VIRTUAL_ENV) {
+    try {
+        & python -m pip install --upgrade pip setuptools wheel --quiet
+        Write-Host "✓ Pip upgraded successfully inside venv" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed to upgrade pip" -ForegroundColor Red
+        exit 1
+    }
+} else {
+    Write-Host "✗ Virtual environment was not activated correctly" -ForegroundColor Red
+    exit 1
+}
 
-    print("✅ Building signatures (LOW-LAG MODE)...")
-    signatures = build_signatures(DATASET_DIR, classes, orb)
+Write-Host ""
 
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        print("❌ Cannot open laptop camera")
-        return
+# Step 5: Install required packages
+Write-Host "[4/6] Installing ML packages (this may take 5-10 minutes)..." -ForegroundColor Yellow
 
-    recent_preds = []
-    last_eval = 0.0
-    last_best_label = "NONE"
-    last_best_score = 0
+$requirementsFile = Join-Path $PROJECT_ROOT "requirements.txt"
 
-    print("\n✅ Running. Hold item steady. Press Q to quit.\n")
+if (-not (Test-Path $requirementsFile)) {
+    Write-Host "⚠ requirements.txt not found at: $requirementsFile" -ForegroundColor Yellow
+    Write-Host "  Skipping package installation." -ForegroundColor Gray
+} else {
+    try {
+        Write-Host "Installing packages from requirements.txt..." -ForegroundColor Gray
+        & python -m pip install -r $requirementsFile --quiet
+        Write-Host "✓ All packages installed successfully" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "✗ Failed to install packages" -ForegroundColor Red
+        Write-Host "Try running manually: pip install -r requirements.txt" -ForegroundColor Yellow
+        exit 1
+    }
+}
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+Write-Host ""
 
-        now = time.time()
+# Step 6: Verify installation and check GPU
+Write-Host "[5/6] Verifying installation..." -ForegroundColor Yellow
 
-        if (now - last_eval) >= EVAL_EVERY_SECONDS:
-            gray_live = to_gray_resized(frame, MAX_SIDE)
-            kp, des_live = orb.detectAndCompute(gray_live, None)
+# Test TensorFlow import
+try {
+    $tfVersion = & python -c "import tensorflow as tf; print(tf.__version__)" 2>&1
+    Write-Host "✓ TensorFlow $tfVersion installed" -ForegroundColor Green
+    
+    # Check GPU availability
+    $gpuCheckCmd = "import tensorflow as tf; gpus = tf.config.list_physical_devices('GPU'); print(f'GPUs: {len(gpus)}')"
+    $gpuCheck = & python -c $gpuCheckCmd 2>&1
+    if ($gpuCheck -like "*GPUs: 0*") {
+        Write-Host "⚠ No GPU detected - training will use CPU (slower)" -ForegroundColor Yellow
+        Write-Host "  For GPU support, install CUDA Toolkit and cuDNN separately" -ForegroundColor Gray
+    }
+    else {
+        Write-Host "✓ GPU detected ($gpuCheck) - Acceleration enabled!" -ForegroundColor Green
+    }
+}
+catch {
+    Write-Host "⚠ TensorFlow import failed or not installed" -ForegroundColor Yellow
+}
 
-            best_label = "NONE"
-            best_score = 0
+Write-Host ""
 
-            for c in classes:
-                sc = match_score(des_live, signatures.get(c, []), bf)
-                if sc > best_score:
-                    best_score = sc
-                    best_label = c
+# Step 7: Create project directory structure
+Write-Host "[6/6] Creating project directory structure..." -ForegroundColor Yellow
 
-            if best_score < MIN_GOOD_MATCHES:
-                best_label = "NONE"
+$directories = @(
+    "config",
+    "data",
+    "models",
+    "utils",
+    "datasets",
+    "checkpoints",
+    "logs",
+    "exports"
+)
 
-            recent_preds.append(best_label)
-            if len(recent_preds) > SMOOTH_FRAMES:
-                recent_preds.pop(0)
+foreach ($dir in $directories) {
+    $dirPath = Join-Path $PROJECT_ROOT $dir
+    if (-not (Test-Path $dirPath)) {
+        New-Item -ItemType Directory -Path $dirPath -Force | Out-Null
+        Write-Host "  Created: $dir\" -ForegroundColor Gray
+    }
+}
 
-            last_best_label = best_label
-            last_best_score = best_score
-            last_eval = now
+Write-Host "✓ Project structure created" -ForegroundColor Green
+Write-Host ""
 
-        final_label = majority_vote(recent_preds)
-        ingredients = recipes.get(final_label, "(no recipe mapping)")
-
-        lines = [
-            "SmartCulinary AI (No-Lag Folder Matching)",
-            f"Detected: {final_label}",
-            f"Score: {last_best_score} | Updates every {EVAL_EVERY_SECONDS}s",
-            "Ingredients:",
-            ingredients[:80] + ("..." if len(ingredients) > 80 else ""),
-            "Hold item close | Good lighting | Q to quit"
-        ]
-
-        overlay(frame, lines)
-        cv2.imshow("SmartCulinary AI", frame)
-
-        if (cv2.waitKey(1) & 0xFF) == ord("q"):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    main()
-
+# Final summary
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "Setup Complete!" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Cyan
