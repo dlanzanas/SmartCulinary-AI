@@ -237,6 +237,7 @@ foreach ($dir in $directories) {
 Write-Host "✓ Project structure created" -ForegroundColor Green
 Write-Host ""
 
+
 # Final summary
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Setup Complete!" -ForegroundColor Green
