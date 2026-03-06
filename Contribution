@@ -1,28 +1,9 @@
-VISUAL / UI-UX (Frontend)
-Branch:
-feature/ui-ux
-Responsible for:
+Lanzanas, Dinh Priam – Backend / ML
 
-User interface + app experience.
+TensorFlowJS Conversion Implementation (convert_model_to_tfjs)
 
-From your folders:
+TensorFlow Lite Conversion Implementation (convert_to_tflite.py)
 
-✅ smartculinary_app/ (Flutter app)
-✅ UI_UX_REFERENCE
-✅ FLUTTER_SETUP
-✅ visualizations/
-✅ camera preview UI
-✅ layout design
+Model Evaluation Implementation (evaluate.py)
 
-Tasks:
-
-Flutter UI
-
-Screens
-
-Camera interface
-
-Result display
-
-UX improvements
-
+Backend Setup Script (API_BACKEND_SETUP)
