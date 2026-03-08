@@ -1,30 +1,29 @@
-LEADER / CORE AI (Coding)
-Branch:
-feature/ai-model
-Responsible for:
+Saculsan, Michael Robin B. – Backend / Machine Learning
+	•	Dataset Download and Preparation (download_dataset.py)
+	•	Dataset Merging and Organization (merge_datasets.py)
+	•	Data Preprocessing Pipeline (data_preprocessing.py)
+	•	Dataset Flattening for Training (flatten_grocery_dataset.py)
+	•	Dataset Exploration and Analysis (data_explorer.py)
+	•	CNN Model Architecture Implementation (model_builder.py)
+	•	Model Evaluation Metrics (metrics.py)
+	•	Training Visualization Tools (visualization.py)
 
-Everything related to machine learning & backend logic
 
-From your folders:
+data/
+	•	flatten_grocery_dataset.py
+	•	data_preprocessing.py
+	•	merge_datasets.py
+	•	download_dataset.py
+	•	data_explorer.py
 
-✅ train/
-✅ models/
-✅ checkpoints/
-✅ evaluate.py
-✅ convert_model_to_tflite.py
-✅ convert_model_to_tfjs.py
-✅ tensorflow_conversion/
-✅ api_server.py
-✅ api_requirements
+models/
+	•	model_builder.py
 
-Tasks:
+utils/
+	•	visualization.py
+	•	metrics.py
 
-Model training
 
-Model evaluation
+ito lalagay mo sa contribution
 
-TFLite conversion
-
-API logic
-
-ML debugging
+edit mo contribution lagay mo ito
