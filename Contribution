@@ -1,35 +1,8 @@
-SYSTEM / DEPLOYMENT / DATA (Integrator)
+Biocarles, Razec Meir – Frontend / Setup*
 
-Branch:
-feature/system-integration
-Responsible for:
-
-Project setup, configs, environment, documentation.
-
-From your folders:
-
-✅ config/
-✅ utils/
-✅ setup_environment
-✅ install_cuda_gpu
-✅ fix_tensorboard
-✅ requirements
-✅ API_BACKEND_SETUP
-✅ README files
-✅ datasets/
-✅ data/
-✅ reports/
-
-Tasks:
-
-Environment setup
-
-Dependency management
-
-Dataset organization
-
-Documentation
-
-Testing pipeline
-
-Running system end-to-end
+* Flutter Application Setup (FLUTTER_SETUP)
+* UI/UX Reference Implementation (UI_UX_REFERENCE)
+* CUDA GPU Installation Script (install_cuda_gpu)
+* TensorBoard Fix Script (fix_tensorboard)
+* Environment and Manual Setup Scripts (setup_environment, setup_manual, setup_fixed)
+* Project Dependency Configuration (requirements, api_requirements)
